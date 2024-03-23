@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Warehouse Temperature and Humidity Monitor</title>
+    <script type="text/javascript" src="https://cdn.jsdelivr.net/npm/particle-api-js@8/dist/particle.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+        }
+        h1, h2 {
+            color: #333;
+        }
+        form {
+            margin-bottom: 20px;
+        }
+        input[type="text"], input[type="password"] {
+            padding: 5px;
+            margin-bottom: 10px;
+        }
+        input[type="submit"] {
+            padding: 5px 10px;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            cursor: pointer;
+        }
+        #appContainer {
+            border: 1px solid #ccc;
+            padding: 20px;
+            background-color: #f9f9f9;
+        }
+        #alerts p {
+            margin: 5px 0;
+        }
+        #pastEvents {
+            margin-top: 20px;
+        }
+        #pastEvents div {
+            padding: 5px;
+            background-color: #e6e6e6;
+            margin-bottom: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div id="loginContainer">
+        <h2>Login</h2>
+        <form id="loginForm">
+            <label for="username">Username:</label>
+            <input type="text" id="username" name="username" required>
+            <br>
+            <label for="password">Password:</label>
+            <input type="password" id="password" name="password" required>
+            <br>
+            <input type="submit" value="Login">
+        </form>
+        <p id="loginError" style="display: none; color: red;">Invalid username or password.</p>
+    </div>
+    <div id="appContainer" style="display: none;">
+        <h1>Warehouse Temperature and Humidity Monitor</h1>
+        <div>
+            <p>Current Temperature: <span id="temperature"></span> </p>
+            <p>Current Humidity: <span id="humidity"></span> </p>
+            <p>Maximum Temperature (4 hours): <span id="maxTemp"></span> </p>
+        </div>
+        <div id="alerts">
+            <p id="overheatAlert" style="display: none; color: red;">Overheat detected!</p>
+            <p id="tooHumidAlert" style="display: none; color: red;">Too humid!</p>
+        </div>
+        <h3>Past Events</h3>
+        <div id="pastEvents"></div>
+    </div>
+
+    <script>
+        const loginForm = document.getElementById('loginForm');
+        const loginError = document.getElementById('loginError');
+        const appContainer = document.getElementById('appContainer');
+        const pastEventsContainer = document.getElementById('pastEvents');
+
+        window.addEventListener('load', () => {
+            const storedUsername = localStorage.getItem('username');
+            const storedPassword = localStorage.getItem('password');
+            const expirationDate = new Date(localStorage.getItem('expirationDate'));
+
+            if (storedUsername && storedPassword && expirationDate > new Date()) {
+                // Credentials are stored and haven't expired, automatically log in
+                const loginForm = new FormData();
+                loginForm.append('username', storedUsername);
+                loginForm.append('password', storedPassword);
+
+                fetch('https://api.particle.io/oauth/token', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded'
+                    },
+                    body: new URLSearchParams({
+                        'client_id': 'particle',
+                        'client_secret': 'particle',
+                        'expires_in': 3600,
+                        'grant_type': 'password',
+                        'password': storedPassword,
+                        'username': storedUsername
+                    })
+                })
+                .then(response => response.json())
+                .then(data => {
+                    const accessToken = data.access_token;
+                    loginContainer.style.display = 'none';
+                    appContainer.style.display = 'block';
+                    initParticleAPI(accessToken);
+                })
+                .catch(error => {
+                    console.error('Error:', error);
+                    loginError.style.display = 'block';
+                });
+            }
+        });
+
+        loginForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+
+            const username = document.getElementById('username').value;
+            const password = document.getElementById('password').value;
+
+            try {
+                const response = await fetch('https://api.particle.io/oauth/token', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded'
+                    },
+                    body: new URLSearchParams({
+                        'client_id': 'particle',
+                        'client_secret': 'particle',
+                        'expires_in': 3600,
+                        'grant_type': 'password',
+                        'password': password,
+                        'username': username
+                    })
+                });
+
+                if (response.ok) {
+                    const data = await response.json();
+                    const accessToken = data.access_token;
+
+                    // Store the username and password in localStorage
+                    localStorage.setItem('username', username);
+                    localStorage.setItem('password', password);
+                    const expirationDate = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000); // 30 days from now
+                    localStorage.setItem('expirationDate', expirationDate.toISOString());
+
+                    // Hide login container and show app container
+                    loginContainer.style.display = 'none';
+                    appContainer.style.display = 'block';
+
+                    // Initialize Particle API and subscribe to events
+                    initParticleAPI(accessToken);
+                } else {
+                    loginError.style.display = 'block';
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                loginError.style.display = 'block';
+            }
+        });
+
+        function initParticleAPI(accessToken) {
+            const particle = new Particle();
+            const deviceId = '******Add Your DeviceID HERE';
+
+            particle.getEventStream({ deviceId, auth: accessToken }).then(stream => {
+                // Subscribe to real-time events
+                stream.on('event', handleEvent);
+            });
+        }
+
+        function handleEvent(event) {
+            const { name, data, published_at } = event;
+            console.log(event);
+            if (name === 'warehouse_data') {
+                // Update temperature and humidity
+                const [temp, humid, maxTemp] = data.split(', ');
+                const tempValue = temp.split(': ')[1];
+                const humidValue = humid.split(': ')[1];
+                const maxTempValue = maxTemp.split(': ')[1];
+
+                if (!document.getElementById('temperature').textContent) {
+                    document.getElementById('temperature').textContent = tempValue;
+                }
+                if (!document.getElementById('humidity').textContent) {
+                    document.getElementById('humidity').textContent = humidValue;
+                }
+                // Update maximum temperature
+                if (!document.getElementById('maxTemp').textContent) {
+                    document.getElementById('maxTemp').textContent = maxTempValue;
+                }
+            } else if (name === 'warehouse_temp') {
+                // Handle overheat alert
+                const alert = document.getElementById('overheatAlert');
+                alert.style.display = data === 'overheat' ? 'block' : 'none';
+            } else if (name === 'warehouse_humidity') {
+                // Handle too humid alert
+                const alert = document.getElementById('tooHumidAlert');
+                alert.style.display = data === 'tooHumid' ? 'block' : 'none';
+            }
+
+            // Display past events
+            const eventElement = document.createElement('div');
+            eventElement.textContent = `${new Date(published_at).toLocaleString()}: ${JSON.stringify(event)}`;
+            pastEventsContainer.appendChild(eventElement);
+        }
+    </script>
+</body>
+</html>
